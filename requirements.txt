@@ -1,3 +1,3 @@
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
-git+https://github.com/iqoptionapi/iqoptionapi.git
+https://github.com/iqoptionapi/iqoptionapi/archive/refs/heads/master.zip
