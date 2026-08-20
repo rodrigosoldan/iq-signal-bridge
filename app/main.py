@@ -20,6 +20,7 @@ if not APP_KEY:
 app = FastAPI(title="IQ Signal Bridge", version="1.0.0", docs_url=None, redoc_url=None)
 _lock = threading.RLock()
 _sessions: dict[str, "Session"] = {}
+_pending_logins: dict[str, Any] = {}
 
 
 def authorize(key: str | None) -> None:
@@ -31,9 +32,6 @@ def iq_client(email: str, password: str):
     # iqoptionapi is an unofficial, read-only data connection here. No order API is used.
     from iqoptionapi.stable_api import IQ_Option
     client = IQ_Option(email, password)
-    ok, reason = client.connect()
-    if not ok:
-        raise HTTPException(status_code=401, detail=f"IQ Option login failed: {reason}")
     return client
 
 
@@ -46,6 +44,11 @@ class Session:
 class Login(BaseModel):
     email: str
     password: str
+
+
+class TwoFactorRequest(BaseModel):
+    pending_id: str
+    code: str = Field(min_length=4, max_length=12, pattern=r"^[0-9]+$")
 
 
 class SessionRequest(BaseModel):
@@ -89,6 +92,29 @@ def login(payload: Login, x_bridge_key: str | None = Header(default=None)):
     authorize(x_bridge_key)
     with _lock:
         client = iq_client(payload.email, payload.password)
+        ok, reason = client.connect()
+        if not ok:
+            if str(reason).upper() == "2FA":
+                pending_id = secrets.token_urlsafe(32)
+                _pending_logins[pending_id] = client
+                return {"status": "2fa_required", "requires_2fa": True, "pending_id": pending_id, "read_only": True}
+            raise HTTPException(status_code=401, detail="IQ Option login rejected")
+        client.change_balance("PRACTICE")
+        session_id = secrets.token_urlsafe(32)
+        _sessions[session_id] = Session(client=client)
+    return {"session_id": session_id, "mode": "PRACTICE", "read_only": True}
+
+
+@app.post("/v1/2fa")
+def two_factor(payload: TwoFactorRequest, x_bridge_key: str | None = Header(default=None)):
+    authorize(x_bridge_key)
+    with _lock:
+        client = _pending_logins.pop(payload.pending_id, None)
+        if not client:
+            raise HTTPException(status_code=401, detail="2FA session expired or invalid")
+        ok, _reason = client.connect_2fa(payload.code)
+        if not ok:
+            raise HTTPException(status_code=401, detail="2FA code rejected")
         client.change_balance("PRACTICE")
         session_id = secrets.token_urlsafe(32)
         _sessions[session_id] = Session(client=client)
