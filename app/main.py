@@ -143,10 +143,12 @@ def candles(payload: CandleRequest, x_bridge_key: str | None = Header(default=No
     authorize(x_bridge_key)
     with _lock:
         session = get_session(payload.session_id)
-        active_id = session.client.get_active_id_by_name(payload.active)
-        if not active_id:
-            raise HTTPException(status_code=404, detail="Asset unavailable")
-        data = session.client.get_candles(active_id, payload.size, payload.count, __import__("time").time())
+        # The maintained iqoptionapi stable API accepts an asset symbol here
+        # (for example, ``EURUSD``).  It no longer provides
+        # ``get_active_id_by_name``, which caused every candle request to fail.
+        data = session.client.get_candles(payload.active, payload.size, payload.count, __import__("time").time())
+        if not isinstance(data, list):
+            raise HTTPException(status_code=502, detail="IQ Option did not return candle data")
     return {"asset": payload.active, "size": payload.size, "candles": data, "read_only": True}
 
 
